@@ -1,0 +1,29 @@
+syntax = "proto3";
+package rates;
+option go_package = "github.com/Khuako/usdt-rate-service/gen/rates;rates";
+import "google/protobuf/timestamp.proto";
+
+
+service RatesService{
+  rpc GetRates(GetRatesRequest) returns (GetRatesResponse);
+}
+
+message GetRatesRequest{
+  Method method = 1;
+  int32 n = 2;
+  int32 m = 3;
+}
+message GetRatesResponse{
+  Rate rate = 1;
+}
+message Rate {
+  string id = 1;
+  string ask = 2;
+  string bid = 3;
+  google.protobuf.Timestamp received_at = 4;
+}
+enum Method {
+  UNSPECIFIED = 0;
+  TOP_N = 1;
+  AVG_NM = 2;
+}
