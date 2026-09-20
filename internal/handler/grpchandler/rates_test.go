@@ -12,6 +12,7 @@ import (
 	"github.com/Khuako/usdt-rate-service/internal/rates"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -39,7 +40,7 @@ func TestHandler_GetRates_ServiceErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := &serviceStub{err: fmt.Errorf("service: %w", tt.err)}
-			handler := NewHandler(service)
+			handler := NewHandler(service, zap.NewNop())
 			got, err := handler.GetRates(t.Context(), &ratespb.GetRatesRequest{
 				Method: ratespb.Method_TOP_N,
 				N:      2,
@@ -71,7 +72,7 @@ func TestHandler_GetRates_InvalidMethod(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := &serviceStub{}
-			handler := NewHandler(service)
+			handler := NewHandler(service, zap.NewNop())
 			got, err := handler.GetRates(t.Context(), &ratespb.GetRatesRequest{
 				Method: tt.method,
 				N:      2,
@@ -124,7 +125,7 @@ func TestHandler_GetRates_Success(t *testing.T) {
 					Calculation: tt.wantCalc,
 				},
 			}
-			handler := NewHandler(service)
+			handler := NewHandler(service, zap.NewNop())
 
 			got, err := handler.GetRates(context.Background(), tt.request)
 			if err != nil {

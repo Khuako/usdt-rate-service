@@ -8,6 +8,8 @@ import (
 	"github.com/Khuako/usdt-rate-service/internal/rates"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 )
 
 type Repository struct {
@@ -19,6 +21,8 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 func (r *Repository) Save(ctx context.Context, rate rates.Rate) error {
+	ctx, span := otel.Tracer("usdt-rate-service/internal/rates/repository").Start(ctx, "repository.Save")
+	defer span.End()
 	var m any
 	if rate.Method == rates.MethodAvgNM {
 		m = rate.M
@@ -38,10 +42,14 @@ func (r *Repository) Save(ctx context.Context, rate rates.Rate) error {
 		var pgxErr *pgconn.PgError
 		if errors.As(err, &pgxErr) {
 			if pgxErr.Code == "23505" {
+				span.RecordError(rates.ErrRateAlreadyExists)
+				span.SetStatus(codes.Error, rates.ErrRateAlreadyExists.Error())
 				return rates.ErrRateAlreadyExists
 			}
 
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "error saving rate")
 		return fmt.Errorf("error saving rate: %w", err)
 	}
 	return nil

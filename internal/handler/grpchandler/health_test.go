@@ -61,3 +61,18 @@ func TestHealthHandler_Check(t *testing.T) {
 		})
 	}
 }
+func TestHealthHandler_Shutdown(t *testing.T) {
+	repo := fakePinger{}
+	handler := NewHealthHandler(&repo)
+	handler.Shutdown()
+	resp, err := handler.Check(t.Context(), &healthpb.HealthCheckRequest{})
+	if err != nil {
+		t.Fatalf("error should be nil, got: %v", err)
+	}
+	if resp.Status != healthpb.HealthCheckResponse_NOT_SERVING {
+		t.Errorf("status should be not serving, got: %v", resp.Status)
+	}
+	if repo.calls != 0 {
+		t.Errorf("repo calls should be 0, got: %v", repo.calls)
+	}
+}

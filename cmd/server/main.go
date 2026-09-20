@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -13,48 +14,82 @@ import (
 	"github.com/Khuako/usdt-rate-service/internal/kraken"
 	"github.com/Khuako/usdt-rate-service/internal/rates"
 	"github.com/Khuako/usdt-rate-service/internal/rates/repository"
+	"github.com/Khuako/usdt-rate-service/internal/telemetry"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
-	defer stop()
-	err := run(ctx)
+	logger, err := zap.NewProduction()
 	if err != nil {
 		os.Exit(1)
 	}
+	defer func() {
+		_ = logger.Sync()
+	}()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
+	defer stop()
+	err = run(ctx, logger)
+	if err != nil {
+		logger.Error("server failed", zap.Error(err))
+		_ = logger.Sync()
+		os.Exit(1)
+	}
 }
-func run(ctx context.Context) error {
+func run(ctx context.Context, logger *zap.Logger) error {
 
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: config loading error", err)
 	}
+	provider, err := telemetry.NewTracerProvider(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: error creating tracer provider", err)
+	}
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := provider.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("tracing shutdown failed", zap.Error(err))
+		}
+	}()
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: database connecting error", err)
 	}
 	defer pool.Close()
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err = pool.Ping(pingCtx)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: database ping error", err)
 	}
 	repo := repository.NewRepository(pool)
 	client := kraken.NewClient(cfg.KrakenBaseURL)
 
 	service := rates.NewService(repo, client)
-	handler := grpchandler.NewHandler(service)
+	handler := grpchandler.NewHandler(service, logger)
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: grpc listener error", err)
 	}
-	server := grpc.NewServer()
+	server := grpc.NewServer(grpc.UnaryInterceptor(grpchandler.LoggingInterceptor(logger)), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	ratespb.RegisterRatesServiceServer(server, handler)
 	errChan := make(chan error, 1)
+	healthHandler := grpchandler.NewHealthHandler(pool)
+	healthpb.RegisterHealthServer(server, healthHandler)
+
+	logger.Info("server has started", zap.String("address:", cfg.GRPCAddr))
+
 	go func() {
 		errChan <- server.Serve(listener)
 	}()
@@ -62,6 +97,8 @@ func run(ctx context.Context) error {
 	case err = <-errChan:
 	case <-ctx.Done():
 	}
+	logger.Info("server is stopping")
+	healthHandler.Shutdown()
 	serverStopped := make(chan struct{})
 	go func() {
 		server.GracefulStop()
@@ -72,7 +109,9 @@ func run(ctx context.Context) error {
 	select {
 	case <-serverStopped:
 	case <-t.C:
+		logger.Warn("forcing stop")
 		server.Stop()
 	}
+	logger.Info("server has stopped")
 	return err
 }

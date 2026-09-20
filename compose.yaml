@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: rates
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задай POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: rates
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+  migrate:
+    image: migrate/migrate:v4.19.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - -path
+      - /migrations
+      - -database
+      - postgres://rates:${POSTGRES_PASSWORD:?Задать POSTGRES_PASSWORD в .env}@postgres:5432/rates?sslmode=disable
+      - up
+    restart: "no"
+  server:
+    build: .
+    environment:
+      DATABASE_URL: postgres://rates:${POSTGRES_PASSWORD:?Задай POSTGRES_PASSWORD в .env}@postgres:5432/rates?sslmode=disable
+      GRPC_ADDR: ":50051"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    ports:
+      - "127.0.0.1:50051:50051"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      jaeger:
+        condition: service_started
+    stop_grace_period: 15s
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0
+    ports:
+      - "127.0.0.1:16686:16686"
+volumes:
+  postgres-data:

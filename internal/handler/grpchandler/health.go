@@ -2,6 +2,7 @@ package grpchandler
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -15,7 +16,8 @@ type Pinger interface {
 
 type HealthHandler struct {
 	healthpb.UnimplementedHealthServer
-	pinger Pinger
+	pinger   Pinger
+	stopping atomic.Bool
 }
 
 func NewHealthHandler(pinger Pinger) *HealthHandler {
@@ -26,11 +28,21 @@ func (h *HealthHandler) Check(ctx context.Context, req *healthpb.HealthCheckRequ
 	if req.Service != "" && req.Service != "rates.RatesService" {
 		return nil, status.Error(codes.NotFound, "service not found")
 	}
+	if h.stopping.Load() {
+		return &healthpb.HealthCheckResponse{Status: healthpb.HealthCheckResponse_NOT_SERVING}, nil
+	}
 	timeoutContext, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err := h.pinger.Ping(timeoutContext)
 	if err != nil {
 		return &healthpb.HealthCheckResponse{Status: healthpb.HealthCheckResponse_NOT_SERVING}, nil
 	}
+	if h.stopping.Load() {
+		return &healthpb.HealthCheckResponse{Status: healthpb.HealthCheckResponse_NOT_SERVING}, nil
+	}
 	return &healthpb.HealthCheckResponse{Status: healthpb.HealthCheckResponse_SERVING}, nil
+}
+
+func (h *HealthHandler) Shutdown() {
+	h.stopping.Store(true)
 }
