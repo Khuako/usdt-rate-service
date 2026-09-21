@@ -1,9 +1,13 @@
 package testutils
 
 import (
+	"context"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/Khuako/usdt-rate-service/internal/rates"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func AssertRateEqual(t *testing.T, got, want rates.Rate) {
@@ -23,4 +27,22 @@ func AssertRateEqual(t *testing.T, got, want rates.Rate) {
 	if got.Calculation != want.Calculation {
 		t.Errorf("Calculation: got %+v, want %+v", got.Calculation, want.Calculation)
 	}
+}
+func SetupTestDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("create pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("ping database: %v", err)
+	}
+	return pool
 }

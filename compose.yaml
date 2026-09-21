@@ -31,6 +31,7 @@ services:
     environment:
       DATABASE_URL: postgres://rates:${POSTGRES_PASSWORD:?Задай POSTGRES_PASSWORD в .env}@postgres:5432/rates?sslmode=disable
       GRPC_ADDR: ":50051"
+      KAFKA_BROKERS: "${KAFKA_BROKERS:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     ports:
       - "127.0.0.1:50051:50051"

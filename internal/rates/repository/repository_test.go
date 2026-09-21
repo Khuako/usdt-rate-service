@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
@@ -14,26 +13,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-func setupTestDB(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dbURL := os.Getenv("TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, dbURL)
-	if err != nil {
-		t.Fatalf("create pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("ping database: %v", err)
-	}
-	return pool
-}
 func TestRepository_Save(t *testing.T) {
-	pool := setupTestDB(t)
+	pool := testutils.SetupTestDB(t)
 	tests := []rates.Calculation{
 		{Method: rates.MethodTopN, N: 2},
 		{Method: rates.MethodAvgNM, N: 1, M: 3},

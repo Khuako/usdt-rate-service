@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Khuako/usdt-rate-service/internal/outbox"
 	"github.com/Khuako/usdt-rate-service/internal/rates"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -30,7 +31,9 @@ func (r *Repository) Save(ctx context.Context, rate rates.Rate) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 	var m any
 	if rate.Method == rates.MethodAvgNM {
 		m = rate.M
@@ -88,10 +91,23 @@ func (r *Repository) Save(ctx context.Context, rate rates.Rate) error {
 		e.OccurredAt,
 	)
 	if err != nil {
-		return err
+		var pgxErr *pgconn.PgError
+		if errors.As(err, &pgxErr) {
+			if pgxErr.Code == "23505" {
+				span.RecordError(outbox.ErrMessageAlreadyExists)
+				span.SetStatus(codes.Error, outbox.ErrMessageAlreadyExists.Error())
+				return outbox.ErrMessageAlreadyExists
+			}
+
+		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "error saving outbox event")
+		return fmt.Errorf("error saving outbox event: %w", err)
 	}
 	err = tx.Commit(ctx)
 	if err != nil {
+		span.RecordError(fmt.Errorf("error commiting save: %v", err))
+		span.SetStatus(codes.Error, "error commiting save")
 		return err
 	}
 	return nil

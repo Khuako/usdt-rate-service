@@ -84,10 +84,13 @@ func run(ctx context.Context, logger *zap.Logger) error {
 	service := rates.NewService(repo, client)
 	handler := grpchandler.NewHandler(service, logger)
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
-	defer listener.Close()
+
 	if err != nil {
 		return fmt.Errorf("%w: grpc listener error", err)
 	}
+	defer func() {
+		_ = listener.Close()
+	}()
 	server := grpc.NewServer(grpc.UnaryInterceptor(grpchandler.LoggingInterceptor(logger)), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	ratespb.RegisterRatesServiceServer(server, handler)
 	errChan := make(chan error, 1)
@@ -96,11 +99,11 @@ func run(ctx context.Context, logger *zap.Logger) error {
 
 	outboxCtx, stopOutbox := context.WithCancel(ctx)
 	defer stopOutbox()
-
+	var kafkaClient *kgo.Client
 	var outboxStopped chan struct{}
 	if cfg.KafkaBrokers != "" {
 		var outboxService *outbox.Service
-		kafkaClient, err := kgo.NewClient(
+		kafkaClient, err = kgo.NewClient(
 			kgo.SeedBrokers(strings.Split(cfg.KafkaBrokers, ",")...),
 		)
 		if err != nil {
@@ -162,7 +165,13 @@ func run(ctx context.Context, logger *zap.Logger) error {
 	}
 	if outboxStopped != nil {
 		stopOutbox()
-		<-outboxStopped
+		select {
+		case <-outboxStopped:
+		case <-time.After(5 * time.Second):
+			logger.Warn("forcing Kafka client shutdown")
+			kafkaClient.Close()
+			<-outboxStopped
+		}
 	}
 	logger.Info("server has stopped")
 	return err
